@@ -30,6 +30,7 @@ mongo_client = MongoClient(
 )
 db = mongo_client["rag_app"]
 kb_collection = db["knowledge_base_files"]
+history_collection = db["conversation_history"]
 
 # ─── GCP Storage setup ──────────────────────────────────────────
 GCP_PROJECT = os.getenv("GCP_PROJECT")
@@ -254,11 +255,43 @@ def delete_document_from_knowledge_base(doc_id_or_filename: str) -> bool:
     return True
 
 
+def save_conversation(
+    question: str,
+    answer: str,
+    source: str,
+    file_ids: Optional[List[str]] = None,
+    file_urls: Optional[List[str]] = None,
+    search_all: bool = False,
+    selected_documents_count: int = 0,
+) -> str:
+    """
+    Persist a Q&A interaction to MongoDB conversation_history collection.
+    Returns the inserted document ID as a string.
+    """
+    import time
+    from datetime import datetime
+    doc = {
+        "question": question,
+        "answer": answer,
+        "source": source,
+        "file_ids": file_ids or [],
+        "file_urls": file_urls or [],
+        "search_all": search_all,
+        "selected_documents_count": selected_documents_count,
+        "asked_at": time.time(),
+        "asked_at_human": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
+    }
+    result = history_collection.insert_one(doc)
+    print(f"[History] Saved conversation entry: {result.inserted_id}")
+    return str(result.inserted_id)
+
+
 def ask_question_to_knowledge_base(
     question: str,
     file_ids: Optional[List[str]] = None,
     file_urls: Optional[List[str]] = None,
     search_all: bool = False,
+    source: str = "kb-ask",
 ) -> str:
     """
     Answer a question using the correct Gemini grounding strategy.
@@ -279,7 +312,9 @@ def ask_question_to_knowledge_base(
             {"_id": {"$in": object_ids}},
             {"gemini_file_name": 1, "original_filename": 1}
         ))
-        return _ask_with_file_refs(question, docs)
+        answer = _ask_with_file_refs(question, docs)
+        save_conversation(question, answer, source=source, file_ids=file_ids, selected_documents_count=len(docs))
+        return answer
 
     # CASE 2: Specific docs via GCP URLs
     elif file_urls:
@@ -287,21 +322,28 @@ def ask_question_to_knowledge_base(
             {"gcp_link": {"$in": file_urls}},
             {"gemini_file_name": 1, "original_filename": 1}
         ))
-        return _ask_with_file_refs(question, docs)
+        answer = _ask_with_file_refs(question, docs)
+        save_conversation(question, answer, source=source, file_urls=file_urls, selected_documents_count=len(docs))
+        return answer
 
     # CASE 3: Explicit global search (file_ids="all")
     elif search_all:
-        return _ask_global(question)
+        answer = _ask_global(question)
+        save_conversation(question, answer, source=source, search_all=True)
+        return answer
 
     # CASE 4: Default — use the most recently uploaded document
     else:
         latest = _get_latest_upload()
         if latest:
             print(f"[RAG] No filter given — defaulting to latest upload: '{latest.get('original_filename')}'")
-            return _ask_with_file_refs(question, [latest])
+            answer = _ask_with_file_refs(question, [latest])
+            save_conversation(question, answer, source=source, selected_documents_count=1)
         else:
             print("[RAG] No documents in KB — falling back to global search")
-            return _ask_global(question)
+            answer = _ask_global(question)
+            save_conversation(question, answer, source=source, search_all=True)
+        return answer
 
 
 def _get_latest_upload() -> Optional[dict]:

@@ -3,6 +3,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
+from bson import ObjectId
 import os
 import shutil
 import time
@@ -14,6 +15,8 @@ from utils import (
     list_knowledge_base_files,
     delete_document_from_knowledge_base,
     ask_question_to_knowledge_base,
+    save_conversation,
+    history_collection,
 )
 
 app = FastAPI(
@@ -34,6 +37,8 @@ def read_root():
             "GET  /list            — List all documents (id + gcp_link)",
             "POST /upload-and-ask  — Upload docs + immediately ask a question",
             "POST /kb-ask          — Ask a question using existing KB docs",
+            "GET  /history         — View full Q&A conversation history",
+            "DELETE /history/{id}  — Delete a history entry",
             "DELETE /delete/{id}   — Delete a document",
         ]
     }
@@ -63,6 +68,19 @@ class AskResponse(BaseModel):
     question: str
     answer: str
     selected_documents_count: int
+
+
+class HistoryEntry(BaseModel):
+    id: str
+    question: str
+    answer: str
+    source: str                          # "kb-ask" or "upload-and-ask"
+    file_ids: Optional[List[str]] = []
+    file_urls: Optional[List[str]] = []
+    search_all: bool = False
+    selected_documents_count: int
+    asked_at: float
+    asked_at_human: Optional[str] = None
 
 
 # ─── Endpoints ─────────────────────────────────────────────────────────
@@ -164,7 +182,7 @@ async def upload_and_ask(
 
     # Ask using ONLY this uploaded file
     try:
-        answer = ask_question_to_knowledge_base(question, file_ids=[uploaded_id])
+        answer = ask_question_to_knowledge_base(question, file_ids=[uploaded_id], source="upload-and-ask")
         return AskResponse(
             question=question,
             answer=answer,
@@ -223,6 +241,57 @@ async def kb_ask(
         )
     except Exception as e:
         raise HTTPException(500, detail=f"RAG query failed: {str(e)}")
+
+
+
+@app.get("/history", response_model=Dict[str, List[HistoryEntry]])
+async def get_history(limit: int = 50):
+    """
+    Return the full Q&A conversation history, newest first.
+
+    Query params:
+    - 'limit': max number of entries to return (default 50)
+    """
+    try:
+        entries = list(
+            history_collection.find()
+            .sort("asked_at", -1)
+            .limit(limit)
+        )
+        result = []
+        for e in entries:
+            result.append(HistoryEntry(
+                id=str(e["_id"]),
+                question=e.get("question", ""),
+                answer=e.get("answer", ""),
+                source=e.get("source", "unknown"),
+                file_ids=e.get("file_ids", []),
+                file_urls=e.get("file_urls", []),
+                search_all=e.get("search_all", False),
+                selected_documents_count=e.get("selected_documents_count", 0),
+                asked_at=e.get("asked_at", 0.0),
+                asked_at_human=e.get("asked_at_human"),
+            ))
+        return {"history": result}
+    except Exception as e:
+        raise HTTPException(500, detail=f"Failed to fetch history: {str(e)}")
+
+
+@app.delete("/history/{entry_id}")
+async def delete_history_entry(entry_id: str):
+    """
+    Delete a single conversation history entry by its MongoDB ID.
+    Use the 'id' returned from GET /history.
+    """
+    try:
+        result = history_collection.delete_one({"_id": ObjectId(entry_id)})
+        if result.deleted_count == 0:
+            raise HTTPException(404, detail=f"History entry '{entry_id}' not found")
+        return {"status": "deleted", "id": entry_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, detail=f"Failed to delete history entry: {str(e)}")
 
 
 @app.delete("/delete/{doc_id}")
