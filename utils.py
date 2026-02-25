@@ -132,6 +132,7 @@ def upload_document_to_knowledge_base(
     print(f"[Gemini] Uploaded file: {uploaded_file.name}")
 
     # Import into the File Search Store
+    store_file_name = None
     try:
         upload_op = client.file_search_stores.upload_to_file_search_store(
             file_search_store_name=ACTIVE_STORE_NAME,
@@ -152,7 +153,12 @@ def upload_document_to_knowledge_base(
                 print("[Store] Timed out waiting for store import — continuing anyway.")
                 break
 
-        print(f"[Store] Import operation done: {upload_op.done}")
+        # Save the store file resource name for future deletion
+        if upload_op.done and hasattr(upload_op, 'response') and upload_op.response:
+            store_file_name = getattr(upload_op.response, 'name', None)
+            print(f"[Store] Import done. Store file name: {store_file_name}")
+        else:
+            print(f"[Store] Import operation done: {upload_op.done}")
     except Exception as e:
         print(f"[Store] Warning: Could not import into File Search Store: {e}")
         # Non-fatal — we still have the GCP link for reference
@@ -162,7 +168,8 @@ def upload_document_to_knowledge_base(
         "original_filename": original_filename,
         "display_name": display_name,
         "gcp_link": gcp_link,
-        "gemini_file_name": uploaded_file.name,   # save for potential cleanup
+        "gemini_file_name": uploaded_file.name,   # Gemini File API name (expires 48h)
+        "store_file_name": store_file_name,        # File Search Store name (persistent)
         "uploaded_at": time.time(),
         "metadata": metadata or {},
         "status": "active"
@@ -212,6 +219,16 @@ def delete_document_from_knowledge_base(doc_id_or_filename: str) -> bool:
     doc = kb_collection.find_one(query)
     if not doc:
         return False
+
+    # Best-effort: delete from Gemini File Search Store (persistent index)
+    if doc.get("store_file_name"):
+        try:
+            client.file_search_stores.documents.delete(
+                name=doc["store_file_name"]
+            )
+            print(f"[Store] Deleted from File Search Store: {doc['store_file_name']}")
+        except Exception as e:
+            print(f"[Store] Could not delete from File Search Store: {e}")
 
     # Best-effort: delete from Gemini Files API
     if "gemini_file_name" in doc:
@@ -328,19 +345,9 @@ def _ask_with_file_refs(question: str, docs: list) -> str:
             "Please re-upload using /upload and use the new ID, or use /kb-ask without file_ids to search all documents."
         )
 
-    # Build content: [file_part, ..., question_text]
-    # contents = file_parts + [question]
-    contents = question
+    # Build content: file references + question text
+    contents = file_parts + [question]
     print(f"[RAG] Direct query with {len(file_parts)} file ref(s)")
-
-    # response = client.models.generate_content(
-    #     model=MODEL_ID,
-    #     contents=contents,
-    #     config=types.GenerateContentConfig(
-    #         temperature=0.3,
-    #         max_output_tokens=1500,
-    #     )
-    # )
 
     response = client.models.generate_content(
         model=MODEL_ID,
@@ -348,13 +355,6 @@ def _ask_with_file_refs(question: str, docs: list) -> str:
         config=types.GenerateContentConfig(
             temperature=0.3,
             max_output_tokens=1500,
-            tools=[
-                types.Tool(
-                    file_search=types.FileSearch(
-                        file_search_store_names=[ACTIVE_STORE_NAME],
-                    )
-                )
-            ]
         )
     )
 
