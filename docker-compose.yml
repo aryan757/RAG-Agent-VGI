@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     container_name: rag-agent
     ports:
-      - "8000:8000"
+      - "4701:4701"
     env_file:
       - .env
     environment:
