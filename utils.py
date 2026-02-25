@@ -31,8 +31,12 @@ mongo_client = MongoClient(
 db = mongo_client["rag_app"]
 kb_collection = db["knowledge_base_files"]
 history_collection = db["conversation_history"]
+chat_history_collection = db["chat_history"]
 
 # ─── GCP Storage setup ──────────────────────────────────────────
+# Uses Application Default Credentials (ADC). Set one of:
+#   - GOOGLE_APPLICATION_CREDENTIALS in .env (path to service account JSON), or
+#   - run: gcloud auth application-default login
 GCP_PROJECT = os.getenv("GCP_PROJECT")
 GCP_BUCKET_NAME = os.getenv("GCP_BUCKET_NAME", "").strip()
 
@@ -283,6 +287,34 @@ def save_conversation(
     }
     result = history_collection.insert_one(doc)
     print(f"[History] Saved conversation entry: {result.inserted_id}")
+    return str(result.inserted_id)
+
+
+def save_chat_turn(
+    question: str,
+    answer: str,
+    source: str,
+    conversation_id: Optional[str] = None,
+    chat_id: Optional[str] = None,
+) -> str:
+    """
+    Persist a single chat turn (from ai-agent-hub) to MongoDB chat_history collection.
+    source: "pdf" | "database" (or "kb-ask" | "upload-and-ask" | "database").
+    Returns the inserted document ID as a string.
+    """
+    import time
+    from datetime import datetime
+    doc = {
+        "question": question,
+        "answer": answer,
+        "source": source,
+        "conversation_id": conversation_id or "",
+        "chat_id": chat_id or "",
+        "asked_at": time.time(),
+        "asked_at_human": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
+    }
+    result = chat_history_collection.insert_one(doc)
+    print(f"[ChatHistory] Saved chat turn ({source}): {result.inserted_id}")
     return str(result.inserted_id)
 
 

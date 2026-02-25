@@ -1,5 +1,6 @@
 # main.py
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -16,6 +17,7 @@ from utils import (
     delete_document_from_knowledge_base,
     ask_question_to_knowledge_base,
     save_conversation,
+    save_chat_turn,
     history_collection,
 )
 
@@ -23,6 +25,15 @@ app = FastAPI(
     title="RAG Knowledge Base API",
     description="Upload PDFs → GCP → MongoDB → Ask questions via Gemini File Search",
     version="1.0.0"
+)
+
+# ─── CORS (required when frontend runs on a different origin) ───────────
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -39,6 +50,9 @@ def read_root():
             "POST /kb-ask          — Ask a question using existing KB docs",
             "GET  /history         — View full Q&A conversation history",
             "DELETE /history/{id}  — Delete a history entry",
+            "POST /save-chat-turn  — Save a chat turn (pdf or database) from ai-agent-hub",
+            "GET  /chat-history    — View unified chat history (optional: ?conversation_id=)",
+            "GET  /conversations   — List conversations for sidebar",
             "DELETE /delete/{id}   — Delete a document",
         ]
     }
@@ -81,6 +95,14 @@ class HistoryEntry(BaseModel):
     selected_documents_count: int
     asked_at: float
     asked_at_human: Optional[str] = None
+
+
+class SaveChatTurnRequest(BaseModel):
+    question: str
+    answer: str
+    source: str                           # "pdf" | "database" (or "kb-ask" | "upload-and-ask" | "database")
+    conversation_id: Optional[str] = None
+    chat_id: Optional[str] = None
 
 
 # ─── Endpoints ─────────────────────────────────────────────────────────
@@ -275,6 +297,112 @@ async def get_history(limit: int = 50):
         return {"history": result}
     except Exception as e:
         raise HTTPException(500, detail=f"Failed to fetch history: {str(e)}")
+
+
+@app.post("/save-chat-turn")
+async def save_chat_turn_endpoint(body: SaveChatTurnRequest):
+    """
+    Save a single chat turn from ai-agent-hub (called after every response).
+    Stores both PDF and database chat turns in chat_history for unified history.
+    """
+    try:
+        entry_id = save_chat_turn(
+            question=body.question,
+            answer=body.answer,
+            source=body.source,
+            conversation_id=body.conversation_id,
+            chat_id=body.chat_id,
+        )
+        return {"status": "saved", "id": entry_id}
+    except Exception as e:
+        raise HTTPException(500, detail=f"Failed to save chat turn: {str(e)}")
+
+
+@app.get("/chat-history", response_model=Dict[str, List[Dict[str, Any]]])
+async def get_chat_history(
+    limit: int = 100,
+    source: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+):
+    """
+    Return unified chat history (pdf + database), newest first.
+    Query params: limit (default 100), source (optional), conversation_id (optional: messages for one conversation).
+    """
+    try:
+        from utils import chat_history_collection
+        q = {}
+        if source:
+            q["source"] = source
+        if conversation_id:
+            q["conversation_id"] = conversation_id
+        order = 1 if conversation_id else -1
+        entries = list(
+            chat_history_collection.find(q).sort("asked_at", order).limit(limit)
+        )
+        result = []
+        for e in entries:
+            result.append({
+                "id": str(e["_id"]),
+                "question": e.get("question", ""),
+                "answer": e.get("answer", ""),
+                "source": e.get("source", ""),
+                "conversation_id": e.get("conversation_id", ""),
+                "chat_id": e.get("chat_id", ""),
+                "asked_at": e.get("asked_at", 0.0),
+                "asked_at_human": e.get("asked_at_human"),
+            })
+        return {"chat_history": result}
+    except Exception as e:
+        raise HTTPException(500, detail=f"Failed to fetch chat history: {str(e)}")
+
+
+@app.get("/conversations", response_model=Dict[str, List[Dict[str, Any]]])
+async def get_conversations(limit: int = 50):
+    """
+    Return list of conversations for sidebar (grouped from chat_history by conversation_id).
+    Each item: id (conversation_id), title (first question), preview (last exchange), timestamp, message_count.
+    """
+    try:
+        from utils import chat_history_collection
+        pipeline = [
+            {"$match": {"conversation_id": {"$exists": True, "$ne": ""}}},
+            {"$sort": {"asked_at": 1}},
+            {
+                "$group": {
+                    "_id": "$conversation_id",
+                    "first_question": {"$first": "$question"},
+                    "last_question": {"$last": "$question"},
+                    "last_answer": {"$last": "$answer"},
+                    "timestamp": {"$max": "$asked_at"},
+                    "message_count": {"$sum": 1},
+                }
+            },
+            {"$sort": {"timestamp": -1}},
+            {"$limit": limit},
+        ]
+        cursor = chat_history_collection.aggregate(pipeline)
+        result = []
+        for row in cursor:
+            title = (row.get("first_question") or "").strip()
+            if len(title) > 35:
+                title = title[:35] + "…"
+            if not title:
+                title = "New chat"
+            last_q = (row.get("last_question") or "").strip()
+            last_a = (row.get("last_answer") or "").strip()
+            preview = last_a if last_a else "You: " + (last_q[:37] + "…" if len(last_q) > 37 else last_q)
+            if len(preview) > 45:
+                preview = preview[:45] + "…"
+            result.append({
+                "id": row["_id"],
+                "title": title,
+                "preview": preview,
+                "timestamp": row.get("timestamp", 0),
+                "message_count": row.get("message_count", 0),
+            })
+        return {"conversations": result}
+    except Exception as e:
+        raise HTTPException(500, detail=f"Failed to fetch conversations: {str(e)}")
 
 
 @app.delete("/history/{entry_id}")
