@@ -1,0 +1,20 @@
+services:
+  rag-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag-agent
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcp-credentials.json
+    volumes:
+      - ./gcp-credentials.json:/app/gcp-credentials.json:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
