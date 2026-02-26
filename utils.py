@@ -318,6 +318,16 @@ def save_chat_turn(
     return str(result.inserted_id)
 
 
+def delete_conversation_history(conversation_id: str) -> int:
+    """
+    Delete all chat turns for a given conversation_id from chat_history.
+    Returns the number of deleted documents.
+    """
+    result = chat_history_collection.delete_many({"conversation_id": conversation_id})
+    print(f"[ChatHistory] Deleted {result.deleted_count} turns for conversation: {conversation_id}")
+    return result.deleted_count
+
+
 def ask_question_to_knowledge_base(
     question: str,
     file_ids: Optional[List[str]] = None,

@@ -18,6 +18,7 @@ from utils import (
     ask_question_to_knowledge_base,
     save_conversation,
     save_chat_turn,
+    delete_conversation_history,
     history_collection,
 )
 
@@ -53,6 +54,7 @@ def read_root():
             "POST /save-chat-turn  — Save a chat turn (pdf or database) from ai-agent-hub",
             "GET  /chat-history    — View unified chat history (optional: ?conversation_id=)",
             "GET  /conversations   — List conversations for sidebar",
+            "DELETE /conversations/{id} — Delete an entire conversation",
             "DELETE /delete/{id}   — Delete a document",
         ]
     }
@@ -420,6 +422,18 @@ async def delete_history_entry(entry_id: str):
         raise
     except Exception as e:
         raise HTTPException(500, detail=f"Failed to delete history entry: {str(e)}")
+
+
+@app.delete("/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str):
+    """
+    Delete a full conversation (all turns) from chat_history by conversation_id.
+    """
+    try:
+        count = delete_conversation_history(conversation_id)
+        return {"status": "deleted", "conversation_id": conversation_id, "deleted_count": count}
+    except Exception as e:
+        raise HTTPException(500, detail=f"Failed to delete conversation: {str(e)}")
 
 
 @app.delete("/delete/{doc_id}")
