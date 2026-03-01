@@ -9,6 +9,7 @@ import os
 import shutil
 import time
 from datetime import datetime
+import requests
 
 # ─── Import our helpers ───────────────────────────────────────────────
 from utils import (
@@ -54,8 +55,8 @@ def read_root():
             "POST /save-chat-turn  — Save a chat turn (pdf or database) from ai-agent-hub",
             "GET  /chat-history    — View unified chat history (optional: ?conversation_id=)",
             "GET  /conversations   — List conversations for sidebar",
-            "DELETE /conversations/{id} — Delete an entire conversation",
             "DELETE /delete/{id}   — Delete a document",
+            "GET  /knowledgebase   — Call ElevenLabs knowledge-base API",
         ]
     }
 
@@ -447,3 +448,20 @@ async def delete_file(doc_id: str):
         return {"status": "deleted", "id": doc_id}
     else:
         raise HTTPException(404, detail=f"Document with id '{doc_id}' not found")
+
+
+@app.get("/knowledgebase")
+async def get_knowledgebase():
+    """
+    Call ElevenLabs knowledge-base API and return response.
+    """
+    url = "https://api.elevenlabs.io/v1/convai/knowledge-base?page_size=50"
+    headers = {
+        'xi-api-key': 'sk_6dd232cd750990a82f85392f4bd653a8b408b5221d6b1d13'
+    }
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch knowledge base: {str(e)}")

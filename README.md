@@ -19,8 +19,13 @@ User → /kb-ask or /upload-and-ask → Gemini AI → Answer
 
 ## 🚀 Running the Server
 
+**Requires Python 3.10+** for the Gemini File Search Store API (`google-genai>=1.49.0`). Use the Python 3.11 venv for full RAG support:
+
 ```bash
-# Activate virtual environment
+# Activate virtual environment (Python 3.11 — recommended)
+source venv_py311/bin/activate
+
+# Or if you only have the older venv (Python 3.9): File Search Store will be disabled
 source venv/bin/activate
 
 # Start server (auto-reloads on file changes)
@@ -29,6 +34,8 @@ uvicorn main:app --reload --port 8000
 # Swagger UI available at:
 # http://localhost:8000/docs
 ```
+
+To create the Python 3.11 venv: `python3.11 -m venv venv_py311` then `pip install -r requirements.txt`.
 
 ---
 
@@ -242,3 +249,6 @@ GCP_BUCKET_NAME=your-bucket-name
 FILE_SEARCH_STORE_NAME=my-knowledge-base-store
 MODEL_ID=gemini-2.0-flash
 ```
+cd /Users/deepakarvd/Documents/code/RAG-Agent-VGI
+source venv_py311/bin/activate
+uvicorn main:app --reload --port 8000
