@@ -1,5 +1,5 @@
 # main.py
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -10,7 +10,9 @@ import shutil
 import time
 from datetime import datetime
 import requests
-
+import asyncio
+import websockets
+import json
 # ─── Import our helpers ───────────────────────────────────────────────
 from utils import (
     upload_document_to_knowledge_base,
@@ -39,6 +41,8 @@ app.add_middleware(
 )
 
 
+# Import ElevenLabs integration
+from elevenalbs import upload_to_elevenlabs_kb, get_elevenlabs_knowledgebase
 # ─── Root ──────────────────────────────────────────────────────────────
 @app.get("/")
 def read_root():
@@ -57,6 +61,7 @@ def read_root():
             "GET  /conversations   — List conversations for sidebar",
             "DELETE /delete/{id}   — Delete a document",
             "GET  /knowledgebase   — Call ElevenLabs knowledge-base API",
+            "WS   /ws/conversation — Proxy WebSocket to ElevenLabs ConvAI"
         ]
     }
 
@@ -128,6 +133,12 @@ async def upload_to_kb(
             local_path=temp_path,
             original_filename=file.filename,
             display_name=display_name or file.filename
+        )
+        
+        # Parallel-upload to ElevenLabs
+        elevenlabs_upload = upload_to_elevenlabs_kb(
+            local_path=temp_path,
+            original_filename=file.filename
         )
 
         return UploadResponse(
@@ -455,41 +466,33 @@ async def get_knowledgebase():
     """
     Call ElevenLabs knowledge-base API and return response.
     """
-    url = "https://api.elevenlabs.io/v1/convai/knowledge-base?page_size=50"
-    headers = {
-        'xi-api-key': 'sk_6dd232cd750990a82f85392f4bd653a8b408b5221d6b1d13'
-    }
     try:
-        response = requests.get(url, headers=headers)
+        return get_elevenlabs_knowledgebase()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch knowledge base: {str(e)}")
+
+
+@app.get("/elevenlabs/signed-url")
+async def get_elevenlabs_signed_url():
+    """
+    Get a signed URL for the ElevenLabs Conversational AI WebSocket.
+    This allows the frontend's official React SDK to connect directly to ElevenLabs
+    without exposing the XI_API_KEY to the browser.
+    """
+    agent_id = "agent_2701kjmpzs39egyswt3nmcww1tpx"
+    # We must hit the ElevenLabs API server-side to generate a signed WebRTC/WebSocket URL
+    try:
+        api_key = os.environ.get("ELEVENLABS_API_KEY", "sk_6dd232cd750990a82f85392f4bd653a8b408b5221d6b1d13")
+        url = f"https://api.elevenlabs.io/v1/convai/conversation/get_signed_url?agent_id={agent_id}"
+        
+        response = requests.get(
+            url,
+            headers={"xi-api-key": api_key}
+        )
         response.raise_for_status()
         data = response.json()
         
-        # Only return required fields and convert unix timestamps to ISO format 
-        # so the browser can easily parse it and display it in the user's local timezone
-        formatted_docs = []
-        for doc in data.get("documents", []):
-            metadata = doc.get("metadata", {})
-            created_at_unix = metadata.get("created_at_unix_secs")
-            updated_at_unix = metadata.get("last_updated_at_unix_secs")
-            
-            # Convert to ISO 8601 strings indicating UTC (Z)
-            created_at_iso = datetime.utcfromtimestamp(created_at_unix).isoformat() + "Z" if created_at_unix else None
-            updated_at_iso = datetime.utcfromtimestamp(updated_at_unix).isoformat() + "Z" if updated_at_unix else None
-            
-            # Map necessary fields
-            doc_type = doc.get("type")
-            doc_url = doc.get("url") if doc_type == "url" else "no url"
-            
-            formatted_docs.append({
-                "id": doc.get("id"),
-                "name": doc.get("name"),
-                "type": doc_type,
-                "size_bytes": metadata.get("size_bytes"),
-                "url": doc_url,
-                "created_at": created_at_iso,
-                "updated_at": updated_at_iso
-            })
-            
-        return {"documents": formatted_docs, "has_more": data.get("has_more", False)}
+        return {"signed_url": data.get("signed_url")}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch knowledge base: {str(e)}")
+        print(f"Error getting signed URL: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate signed url: {str(e)}")
