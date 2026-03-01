@@ -30,6 +30,11 @@ def upload_to_elevenlabs_kb(local_path: str, original_filename: str):
             response.raise_for_status()
             print(f"Successfully uploaded {original_filename} to ElevenLabs: {response.json()}")
             return response.json()
+    except requests.exceptions.HTTPError as e:
+        print(f"HTTP Error uploading to ElevenLabs KB: {e}")
+        if e.response is not None:
+            print(f"ElevenLabs Response: {e.response.text}")
+        return None
     except Exception as e:
         print(f"Error uploading to ElevenLabs KB: {e}")
         # We don't bubble the error so the main Gemini upload still succeeds
@@ -76,3 +81,66 @@ def get_elevenlabs_knowledgebase():
         })
         
     return {"documents": formatted_docs, "has_more": data.get("has_more", False)}
+
+def attach_document_to_agent(agent_id: str, document_id: str, document_name: str):
+    """
+    Fetch the agent, append the document to its knowledge base, and PATCH it back.
+    """
+    url = f"https://api.elevenlabs.io/v1/convai/agents/{agent_id}"
+    api_key = os.environ.get("ELEVENLABS_API_KEY", "sk_6dd232cd750990a82f85392f4bd653a8b408b5221d6b1d13")
+    headers = {
+        'xi-api-key': api_key,
+        'Content-Type': 'application/json'
+    }
+    
+    try:
+        # 1. GET agent config
+        response = requests.get(url, headers={'xi-api-key': api_key})
+        response.raise_for_status()
+        agent_data = response.json()
+        
+        # Extract the prompt object safely
+        conversation_config = agent_data.get("conversation_config", {})
+        agent_config = conversation_config.get("agent", {})
+        prompt_config = agent_config.get("prompt", {})
+        
+        kb_list = prompt_config.get("knowledge_base", [])
+        
+        # Check if document already exists
+        if any(doc.get("id") == document_id for doc in kb_list):
+            print(f"Document {document_id} already attached to agent {agent_id}")
+            return True
+        
+        # Append new doc
+        kb_list.append({
+            "type": "file",
+            "name": document_name,
+            "id": document_id
+        })
+        
+        # Put it back
+        prompt_config["knowledge_base"] = kb_list
+        
+        # Prepare PATCH payload. It's safe to just send the whole prompt block back.
+        patch_payload = {
+            "conversation_config": {
+                "agent": {
+                    "prompt": prompt_config
+                }
+            }
+        }
+        
+        # 2. PATCH agent config
+        patch_response = requests.patch(url, headers=headers, json=patch_payload)
+        patch_response.raise_for_status()
+        print(f"Successfully attached document '{document_name}' to agent {agent_id}")
+        return patch_response.json()
+        
+    except requests.exceptions.HTTPError as e:
+        print(f"HTTP Error attaching document to agent {agent_id}: {e}")
+        if e.response is not None:
+            print(f"Response: {e.response.text}")
+        return None
+    except Exception as e:
+        print(f"Error attaching document to agent {agent_id}: {e}")
+        return None

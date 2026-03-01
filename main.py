@@ -42,7 +42,7 @@ app.add_middleware(
 
 
 # Import ElevenLabs integration
-from elevenalbs import upload_to_elevenlabs_kb, get_elevenlabs_knowledgebase
+from elevenalbs import upload_to_elevenlabs_kb, get_elevenlabs_knowledgebase, attach_document_to_agent
 # ─── Root ──────────────────────────────────────────────────────────────
 @app.get("/")
 def read_root():
@@ -140,6 +140,12 @@ async def upload_to_kb(
             local_path=temp_path,
             original_filename=file.filename
         )
+        if elevenlabs_upload and "id" in elevenlabs_upload:
+            attach_document_to_agent(
+                agent_id="agent_2701kjmpzs39egyswt3nmcww1tpx",
+                document_id=elevenlabs_upload["id"],
+                document_name=elevenlabs_upload.get("name", file.filename)
+            )
 
         return UploadResponse(
             status="success",
@@ -210,6 +216,19 @@ async def upload_and_ask(
             display_name=file.filename
         )
         uploaded_id = result["id"]
+        
+        # Parallel-upload and attach to ElevenLabs
+        elevenlabs_upload = upload_to_elevenlabs_kb(
+            local_path=temp_path,
+            original_filename=file.filename
+        )
+        if elevenlabs_upload and "id" in elevenlabs_upload:
+            attach_document_to_agent(
+                agent_id="agent_2701kjmpzs39egyswt3nmcww1tpx",
+                document_id=elevenlabs_upload["id"],
+                document_name=elevenlabs_upload.get("name", file.filename)
+            )
+            
     except Exception as e:
         raise HTTPException(500, detail=f"Upload failed for {file.filename}: {str(e)}")
     finally:
