@@ -462,6 +462,34 @@ async def get_knowledgebase():
     try:
         response = requests.get(url, headers=headers)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        
+        # Only return required fields and convert unix timestamps to ISO format 
+        # so the browser can easily parse it and display it in the user's local timezone
+        formatted_docs = []
+        for doc in data.get("documents", []):
+            metadata = doc.get("metadata", {})
+            created_at_unix = metadata.get("created_at_unix_secs")
+            updated_at_unix = metadata.get("last_updated_at_unix_secs")
+            
+            # Convert to ISO 8601 strings indicating UTC (Z)
+            created_at_iso = datetime.utcfromtimestamp(created_at_unix).isoformat() + "Z" if created_at_unix else None
+            updated_at_iso = datetime.utcfromtimestamp(updated_at_unix).isoformat() + "Z" if updated_at_unix else None
+            
+            # Map necessary fields
+            doc_type = doc.get("type")
+            doc_url = doc.get("url") if doc_type == "url" else "no url"
+            
+            formatted_docs.append({
+                "id": doc.get("id"),
+                "name": doc.get("name"),
+                "type": doc_type,
+                "size_bytes": metadata.get("size_bytes"),
+                "url": doc_url,
+                "created_at": created_at_iso,
+                "updated_at": updated_at_iso
+            })
+            
+        return {"documents": formatted_docs, "has_more": data.get("has_more", False)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch knowledge base: {str(e)}")
